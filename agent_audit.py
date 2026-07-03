@@ -118,9 +118,12 @@ def analyze_subagent_transcript(session_path: Path, agent_id: str) -> dict:
     self_verified = any(name in VERIFICATION_TOOLS for name in tool_counts)
     duration_seconds = None
     if len(timestamps) >= 2:
-        first = datetime.strptime(min(timestamps), _TIMESTAMP_FORMAT)
-        last = datetime.strptime(max(timestamps), _TIMESTAMP_FORMAT)
-        duration_seconds = (last - first).total_seconds()
+        try:
+            first = datetime.strptime(min(timestamps), _TIMESTAMP_FORMAT)
+            last = datetime.strptime(max(timestamps), _TIMESTAMP_FORMAT)
+            duration_seconds = (last - first).total_seconds()
+        except ValueError:
+            duration_seconds = None
 
     return {
         "available": True,

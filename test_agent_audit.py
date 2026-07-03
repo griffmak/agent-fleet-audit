@@ -156,6 +156,19 @@ class TestAnalyzeSubagentTranscript(unittest.TestCase):
             self.assertEqual(result["total_tool_calls"], 1)
             self.assertAlmostEqual(result["duration_seconds"], 29.728, places=2)
 
+    def test_unparseable_timestamp_degrades_to_none_duration(self):
+        with TemporaryDirectory() as tmp:
+            session_path = self._session_dir(tmp)
+            sub_path = session_path.parent / session_path.stem / "subagents" / "agent-badts.jsonl"
+            write_jsonl(sub_path, [
+                {"type": "assistant", "timestamp": "2026-07-03T14:45:00Z", "message": {"content": [{"type": "tool_use", "name": "Read", "input": {}}]}},
+                {"type": "assistant", "timestamp": "2026-07-03T14:45:05.000Z", "message": {"content": [{"type": "text", "text": "done"}]}},
+            ])
+
+            result = analyze_subagent_transcript(session_path, "badts")
+            self.assertTrue(result["available"])
+            self.assertIsNone(result["duration_seconds"])
+
     def test_not_self_verified_without_verification_tools(self):
         with TemporaryDirectory() as tmp:
             session_path = self._session_dir(tmp)
@@ -245,6 +258,145 @@ class TestMain(unittest.TestCase):
 
             self.assertEqual(exit_code, 1)
             self.assertIn("Error", captured.getvalue())
+
+
+class TestEndToEnd(unittest.TestCase):
+    def test_full_pipeline_via_main(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            home = root / "home"
+            cwd = root / "project"
+            cwd.mkdir(parents=True)
+            session_id = "sess123"
+            project_dir = home / ".claude" / "projects" / project_slug(cwd)
+            session_path = project_dir / f"{session_id}.jsonl"
+
+            write_jsonl(session_path, [
+                {
+                    "type": "assistant",
+                    "message": {"content": [{
+                        "type": "tool_use", "id": "toolu_1", "name": "Agent",
+                        "input": {"description": "Research web thing", "subagent_type": "general-purpose"},
+                    }]},
+                },
+                {
+                    "type": "user",
+                    "message": {"content": [{
+                        "type": "tool_result", "tool_use_id": "toolu_1",
+                        "content": [{"type": "text", "text": "Async agent launched successfully.\nagentId: aaa111 (internal ID...)"}],
+                    }]},
+                },
+                {
+                    "type": "assistant",
+                    "message": {"content": [{
+                        "type": "tool_use", "id": "toolu_2", "name": "Agent",
+                        "input": {"description": "Refactor local code", "subagent_type": "general-purpose"},
+                    }]},
+                },
+                {
+                    "type": "user",
+                    "message": {"content": [{
+                        "type": "tool_result", "tool_use_id": "toolu_2",
+                        "content": [{"type": "text", "text": "Async agent launched successfully.\nagentId: bbb222 (internal ID...)"}],
+                    }]},
+                },
+            ])
+
+            sub_path_1 = session_path.parent / session_path.stem / "subagents" / "agent-aaa111.jsonl"
+            write_jsonl(sub_path_1, [
+                {"type": "assistant", "timestamp": "2026-07-03T14:45:00.000Z", "message": {"content": [{"type": "tool_use", "name": "WebFetch", "input": {}}]}},
+                {"type": "assistant", "timestamp": "2026-07-03T14:45:10.000Z", "message": {"content": [{"type": "text", "text": "done"}]}},
+            ])
+            sub_path_2 = session_path.parent / session_path.stem / "subagents" / "agent-bbb222.jsonl"
+            write_jsonl(sub_path_2, [
+                {"type": "assistant", "timestamp": "2026-07-03T14:45:00.000Z", "message": {"content": [{"type": "tool_use", "name": "Read", "input": {}}]}},
+                {"type": "assistant", "timestamp": "2026-07-03T14:45:05.000Z", "message": {"content": [{"type": "text", "text": "done"}]}},
+            ])
+
+            import agent_audit
+            original_home = agent_audit.Path.home
+            original_cwd = Path.cwd()
+            agent_audit.Path.home = staticmethod(lambda: home)
+            import os
+            os.chdir(cwd)
+            try:
+                captured = io.StringIO()
+                old_stdout = sys.stdout
+                sys.stdout = captured
+                try:
+                    exit_code = main(["--session", session_id])
+                finally:
+                    sys.stdout = old_stdout
+            finally:
+                agent_audit.Path.home = original_home
+                os.chdir(original_cwd)
+
+            report = captured.getvalue()
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Research web thing", report)
+            self.assertIn("Refactor local code", report)
+            lines = {line.split("|")[1].strip(): line for line in report.splitlines() if "|" in line}
+            self.assertIn("yes", lines["Research web thing"])
+            self.assertIn("no", lines["Refactor local code"])
+
+    def test_save_flag_writes_report_file(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            home = root / "home"
+            cwd = root / "project"
+            cwd.mkdir(parents=True)
+            session_id = "sess456"
+            project_dir = home / ".claude" / "projects" / project_slug(cwd)
+            session_path = project_dir / f"{session_id}.jsonl"
+
+            write_jsonl(session_path, [
+                {
+                    "type": "assistant",
+                    "message": {"content": [{
+                        "type": "tool_use", "id": "toolu_1", "name": "Agent",
+                        "input": {"description": "Research web thing", "subagent_type": "general-purpose"},
+                    }]},
+                },
+                {
+                    "type": "user",
+                    "message": {"content": [{
+                        "type": "tool_result", "tool_use_id": "toolu_1",
+                        "content": [{"type": "text", "text": "Async agent launched successfully.\nagentId: ccc333 (internal ID...)"}],
+                    }]},
+                },
+            ])
+            sub_path = session_path.parent / session_path.stem / "subagents" / "agent-ccc333.jsonl"
+            write_jsonl(sub_path, [
+                {"type": "assistant", "timestamp": "2026-07-03T14:45:00.000Z", "message": {"content": [{"type": "tool_use", "name": "WebFetch", "input": {}}]}},
+                {"type": "assistant", "timestamp": "2026-07-03T14:45:10.000Z", "message": {"content": [{"type": "text", "text": "done"}]}},
+            ])
+
+            import agent_audit
+            original_home = agent_audit.Path.home
+            original_cwd = Path.cwd()
+            agent_audit.Path.home = staticmethod(lambda: home)
+            import os
+            os.chdir(cwd)
+            try:
+                captured_out = io.StringIO()
+                captured_err = io.StringIO()
+                old_stdout, old_stderr = sys.stdout, sys.stderr
+                sys.stdout, sys.stderr = captured_out, captured_err
+                try:
+                    exit_code = main(["--session", session_id, "--save"])
+                finally:
+                    sys.stdout, sys.stderr = old_stdout, old_stderr
+            finally:
+                agent_audit.Path.home = original_home
+                os.chdir(original_cwd)
+
+            self.assertEqual(exit_code, 0)
+            saved_path = cwd / "reports" / f"{session_id}.md"
+            self.assertTrue(saved_path.exists())
+            saved_content = saved_path.read_text()
+            self.assertIn("Research web thing", saved_content)
+            self.assertIn("yes", saved_content)
+            self.assertIn(f"Saved to reports/{session_id}.md", captured_err.getvalue())
 
 
 if __name__ == "__main__":
