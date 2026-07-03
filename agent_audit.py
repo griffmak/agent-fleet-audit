@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Retrospective audit of Claude Code subagent dispatches for a session."""
 import re
+from datetime import datetime
 from pathlib import Path
+
+VERIFICATION_TOOLS = {"WebFetch", "WebSearch", "Bash"}
+_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 
 def project_slug(cwd: Path) -> str:
@@ -79,3 +83,47 @@ def extract_dispatches(session_path: Path) -> list:
                         dispatches[tool_use_id]["agent_id"] = match.group(1)
 
     return [dispatches[tid] for tid in order]
+
+
+def analyze_subagent_transcript(session_path: Path, agent_id: str) -> dict:
+    import json
+
+    transcript_path = session_path.parent / session_path.stem / "subagents" / f"agent-{agent_id}.jsonl"
+    if not transcript_path.exists():
+        return {"available": False}
+
+    tool_counts = {}
+    timestamps = []
+    with transcript_path.open() as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ts = record.get("timestamp")
+            if ts:
+                timestamps.append(ts)
+            content = record.get("message", {}).get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        name = block.get("name", "unknown")
+                        tool_counts[name] = tool_counts.get(name, 0) + 1
+
+    self_verified = any(name in VERIFICATION_TOOLS for name in tool_counts)
+    duration_seconds = None
+    if len(timestamps) >= 2:
+        first = datetime.strptime(min(timestamps), _TIMESTAMP_FORMAT)
+        last = datetime.strptime(max(timestamps), _TIMESTAMP_FORMAT)
+        duration_seconds = (last - first).total_seconds()
+
+    return {
+        "available": True,
+        "tool_counts": tool_counts,
+        "total_tool_calls": sum(tool_counts.values()),
+        "self_verified": self_verified,
+        "duration_seconds": duration_seconds,
+    }

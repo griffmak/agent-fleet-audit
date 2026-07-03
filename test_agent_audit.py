@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from agent_audit import project_slug, find_session_file, extract_dispatches
+from agent_audit import project_slug, find_session_file, extract_dispatches, analyze_subagent_transcript
 
 
 def write_jsonl(path: Path, records: list[dict]) -> None:
@@ -123,6 +123,50 @@ class TestExtractDispatches(unittest.TestCase):
             ])
             result = extract_dispatches(session_path)
             self.assertEqual(result[0]["agent_id"], None)
+
+
+class TestAnalyzeSubagentTranscript(unittest.TestCase):
+    def _session_dir(self, tmp):
+        session_path = Path(tmp) / "session.jsonl"
+        write_jsonl(session_path, [{"type": "user"}])
+        return session_path
+
+    def test_missing_transcript_reports_unavailable(self):
+        with TemporaryDirectory() as tmp:
+            session_path = self._session_dir(tmp)
+            result = analyze_subagent_transcript(session_path, "nonexistent")
+            self.assertEqual(result, {"available": False})
+
+    def test_flags_self_verified_when_webfetch_used(self):
+        with TemporaryDirectory() as tmp:
+            session_path = self._session_dir(tmp)
+            sub_path = session_path.parent / session_path.stem / "subagents" / "agent-abc123.jsonl"
+            write_jsonl(sub_path, [
+                {"type": "assistant", "timestamp": "2026-07-03T14:45:33.586Z", "message": {"content": [{"type": "text", "text": "thinking"}]}},
+                {"type": "assistant", "timestamp": "2026-07-03T14:45:38.717Z", "message": {"content": [{"type": "tool_use", "name": "WebFetch", "input": {}}]}},
+                {"type": "assistant", "timestamp": "2026-07-03T14:46:03.314Z", "message": {"content": [{"type": "text", "text": "done"}]}},
+            ])
+
+            result = analyze_subagent_transcript(session_path, "abc123")
+            self.assertTrue(result["available"])
+            self.assertTrue(result["self_verified"])
+            self.assertEqual(result["tool_counts"], {"WebFetch": 1})
+            self.assertEqual(result["total_tool_calls"], 1)
+            self.assertAlmostEqual(result["duration_seconds"], 29.728, places=2)
+
+    def test_not_self_verified_without_verification_tools(self):
+        with TemporaryDirectory() as tmp:
+            session_path = self._session_dir(tmp)
+            sub_path = session_path.parent / session_path.stem / "subagents" / "agent-def456.jsonl"
+            write_jsonl(sub_path, [
+                {"type": "assistant", "timestamp": "2026-07-03T14:45:00.000Z", "message": {"content": [{"type": "tool_use", "name": "Read", "input": {}}]}},
+                {"type": "assistant", "timestamp": "2026-07-03T14:45:05.000Z", "message": {"content": [{"type": "text", "text": "done"}]}},
+            ])
+
+            result = analyze_subagent_transcript(session_path, "def456")
+            self.assertTrue(result["available"])
+            self.assertFalse(result["self_verified"])
+            self.assertEqual(result["tool_counts"], {"Read": 1})
 
 
 if __name__ == "__main__":
