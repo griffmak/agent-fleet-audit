@@ -1,9 +1,11 @@
+import io
 import json
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from agent_audit import project_slug, find_session_file, extract_dispatches, analyze_subagent_transcript, format_duration, render_report
+from agent_audit import project_slug, find_session_file, extract_dispatches, analyze_subagent_transcript, format_duration, render_report, main
 
 
 def write_jsonl(path: Path, records: list[dict]) -> None:
@@ -219,6 +221,30 @@ class TestRenderReport(unittest.TestCase):
             }]
             report = render_report(dispatches, session_path)
             self.assertIn("transcript unavailable", report)
+
+
+class TestMain(unittest.TestCase):
+    def test_prints_error_and_returns_1_when_session_not_found(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "-fake-project").mkdir(parents=True)
+
+            import agent_audit
+            original_home = agent_audit.Path.home
+            agent_audit.Path.home = staticmethod(lambda: root.parent)
+            try:
+                captured = io.StringIO()
+                old_stderr = sys.stderr
+                sys.stderr = captured
+                try:
+                    exit_code = main(["--session", "missing"])
+                finally:
+                    sys.stderr = old_stderr
+            finally:
+                agent_audit.Path.home = original_home
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn("Error", captured.getvalue())
 
 
 if __name__ == "__main__":

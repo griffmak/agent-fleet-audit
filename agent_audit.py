@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Retrospective audit of Claude Code subagent dispatches for a session."""
+import argparse
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -160,3 +162,33 @@ def render_report(dispatches: list, session_path: Path) -> str:
         lines.append(f"| {description} | {subagent_type} | {duration} | {tool_calls} | {self_verified} | |")
 
     return "\n".join(lines)
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Audit subagent dispatches for a Claude Code session")
+    parser.add_argument("--session", dest="session_id", default=None, help="Session ID to audit (defaults to most recently modified session in the current project)")
+    parser.add_argument("--save", action="store_true", help="Also save the report to reports/<sessionId>.md")
+    args = parser.parse_args(argv)
+
+    try:
+        session_path = find_session_file(session_id=args.session_id)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    dispatches = extract_dispatches(session_path)
+    report = render_report(dispatches, session_path)
+    print(report)
+
+    if args.save:
+        reports_dir = Path("reports")
+        reports_dir.mkdir(exist_ok=True)
+        out_path = reports_dir / f"{session_path.stem}.md"
+        out_path.write_text(report + "\n")
+        print(f"\nSaved to {out_path}", file=sys.stderr)
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
