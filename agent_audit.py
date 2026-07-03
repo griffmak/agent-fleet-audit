@@ -127,3 +127,36 @@ def analyze_subagent_transcript(session_path: Path, agent_id: str) -> dict:
         "self_verified": self_verified,
         "duration_seconds": duration_seconds,
     }
+
+
+def format_duration(seconds) -> str:
+    if seconds is None:
+        return "n/a"
+    return f"{seconds:.1f}s"
+
+
+def render_report(dispatches: list, session_path: Path) -> str:
+    lines = [
+        "| Agent | Type | Duration | Tool calls | Self-verified? | Notes |",
+        "|---|---|---|---|---|---|",
+    ]
+    for dispatch in dispatches:
+        description = dispatch["description"] or "(no description)"
+        subagent_type = dispatch["subagent_type"]
+        agent_id = dispatch["agent_id"]
+
+        if not agent_id:
+            lines.append(f"| {description} | {subagent_type} | n/a | n/a | n/a | agentId not found in tool_result |")
+            continue
+
+        analysis = analyze_subagent_transcript(session_path, agent_id)
+        if not analysis["available"]:
+            lines.append(f"| {description} | {subagent_type} | n/a | n/a | n/a | transcript unavailable |")
+            continue
+
+        duration = format_duration(analysis["duration_seconds"])
+        tool_calls = analysis["total_tool_calls"]
+        self_verified = "yes" if analysis["self_verified"] else "no"
+        lines.append(f"| {description} | {subagent_type} | {duration} | {tool_calls} | {self_verified} | |")
+
+    return "\n".join(lines)

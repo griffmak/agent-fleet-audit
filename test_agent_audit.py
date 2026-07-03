@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from agent_audit import project_slug, find_session_file, extract_dispatches, analyze_subagent_transcript
+from agent_audit import project_slug, find_session_file, extract_dispatches, analyze_subagent_transcript, format_duration, render_report
 
 
 def write_jsonl(path: Path, records: list[dict]) -> None:
@@ -167,6 +167,58 @@ class TestAnalyzeSubagentTranscript(unittest.TestCase):
             self.assertTrue(result["available"])
             self.assertFalse(result["self_verified"])
             self.assertEqual(result["tool_counts"], {"Read": 1})
+
+
+class TestFormatDuration(unittest.TestCase):
+    def test_none_is_not_available(self):
+        self.assertEqual(format_duration(None), "n/a")
+
+    def test_formats_seconds_to_one_decimal(self):
+        self.assertEqual(format_duration(29.728), "29.7s")
+
+
+class TestRenderReport(unittest.TestCase):
+    def test_renders_row_per_dispatch_with_agent_id(self):
+        with TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            write_jsonl(session_path, [{"type": "user"}])
+            sub_path = session_path.parent / session_path.stem / "subagents" / "agent-abc123.jsonl"
+            write_jsonl(sub_path, [
+                {"type": "assistant", "timestamp": "2026-07-03T14:45:00.000Z", "message": {"content": [{"type": "tool_use", "name": "WebFetch", "input": {}}]}},
+                {"type": "assistant", "timestamp": "2026-07-03T14:45:10.000Z", "message": {"content": [{"type": "text", "text": "done"}]}},
+            ])
+
+            dispatches = [{
+                "tool_use_id": "toolu_1", "description": "Review spec-kit repo",
+                "subagent_type": "general-purpose", "agent_id": "abc123",
+            }]
+            report = render_report(dispatches, session_path)
+            self.assertIn("Review spec-kit repo", report)
+            self.assertIn("general-purpose", report)
+            self.assertIn("10.0s", report)
+            self.assertIn("yes", report)
+
+    def test_missing_agent_id_reports_no_result(self):
+        with TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            write_jsonl(session_path, [{"type": "user"}])
+            dispatches = [{
+                "tool_use_id": "toolu_1", "description": "Still running",
+                "subagent_type": "general-purpose", "agent_id": None,
+            }]
+            report = render_report(dispatches, session_path)
+            self.assertIn("agentId not found", report)
+
+    def test_missing_transcript_reports_unavailable(self):
+        with TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            write_jsonl(session_path, [{"type": "user"}])
+            dispatches = [{
+                "tool_use_id": "toolu_1", "description": "Gone",
+                "subagent_type": "general-purpose", "agent_id": "missing",
+            }]
+            report = render_report(dispatches, session_path)
+            self.assertIn("transcript unavailable", report)
 
 
 if __name__ == "__main__":
