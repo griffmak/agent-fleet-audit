@@ -224,6 +224,21 @@ class TestRenderReport(unittest.TestCase):
             report = render_report(dispatches, session_path)
             self.assertIn("agentId not found", report)
 
+    def test_escapes_pipe_and_newline_in_description(self):
+        with TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            write_jsonl(session_path, [{"type": "user"}])
+            dispatches = [{
+                "tool_use_id": "toolu_1", "description": "Check A | check B\nsecond line",
+                "subagent_type": "general-purpose", "agent_id": None,
+            }]
+            report = render_report(dispatches, session_path)
+            lines = report.splitlines()
+            # header + separator + exactly one data row: the embedded newline must not
+            # have split the description across an extra line and corrupted the table
+            self.assertEqual(len(lines), 3)
+            self.assertIn("Check A \\| check B second line", lines[2])
+
     def test_missing_transcript_reports_unavailable(self):
         with TemporaryDirectory() as tmp:
             session_path = Path(tmp) / "session.jsonl"

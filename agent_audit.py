@@ -140,14 +140,18 @@ def format_duration(seconds) -> str:
     return f"{seconds:.1f}s"
 
 
+def _escape_cell(value: str) -> str:
+    return value.replace("|", "\\|").replace("\n", " ")
+
+
 def render_report(dispatches: list, session_path: Path) -> str:
     lines = [
         "| Agent | Type | Duration | Tool calls | Self-verified? | Notes |",
         "|---|---|---|---|---|---|",
     ]
     for dispatch in dispatches:
-        description = dispatch["description"] or "(no description)"
-        subagent_type = dispatch["subagent_type"]
+        description = _escape_cell(dispatch["description"] or "(no description)")
+        subagent_type = _escape_cell(dispatch["subagent_type"])
         agent_id = dispatch["agent_id"]
 
         if not agent_id:
